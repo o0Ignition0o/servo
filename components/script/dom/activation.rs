@@ -49,28 +49,15 @@ pub trait Activatable {
     }
 }
 
-/// Whether an activation was initiated via the click() method
-#[derive(PartialEq)]
-pub enum ActivationSource {
-    FromClick,
-    NotFromClick,
-}
-
-// https://html.spec.whatwg.org/multipage/#run-synthetic-click-activation-steps
+// https://html.spec.whatwg.org/multipage/webappapis.html#fire-a-synthetic-mouse-event
 pub fn synthetic_click_activation(
     element: &Element,
     ctrl_key: bool,
     shift_key: bool,
     alt_key: bool,
     meta_key: bool,
-    source: ActivationSource,
+    not_trusted: bool,
 ) {
-    // Step 1
-    if element.click_in_progress() {
-        return;
-    }
-    // Step 2
-    element.set_click_in_progress(true);
     // Step 3
     let activatable = element.as_maybe_activatable();
     if let Some(a) = activatable {
@@ -84,8 +71,8 @@ pub fn synthetic_click_activation(
     let mouse = MouseEvent::new(
         &win,
         DOMString::from("click"),
-        EventBubbles::DoesNotBubble,
-        EventCancelable::NotCancelable,
+        EventBubbles::Bubbles,
+        EventCancelable::Cancelable,
         Some(&win),
         1,
         0,
@@ -101,10 +88,13 @@ pub fn synthetic_click_activation(
         None,
         None,
     );
+
     let event = mouse.upcast::<Event>();
-    if source == ActivationSource::FromClick {
+    event.set_composed(true);
+    if not_trusted {
         event.set_trusted(false);
     }
+
     target.dispatch_event(event);
 
     // Step 5

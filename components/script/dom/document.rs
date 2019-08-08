@@ -4,7 +4,7 @@
 
 use crate::compartments::{AlreadyInCompartment, InCompartment};
 use crate::document_loader::{DocumentLoader, LoadType};
-use crate::dom::activation::{synthetic_click_activation, ActivationSource};
+use crate::dom::activation::synthetic_click_activation;
 use crate::dom::attr::Attr;
 use crate::dom::beforeunloadevent::BeforeUnloadEvent;
 use crate::dom::bindings::callback::ExceptionHandling;
@@ -1460,14 +1460,7 @@ impl Document {
                 {
                     let maybe_elem = target.downcast::<Element>();
                     if let Some(el) = maybe_elem {
-                        synthetic_click_activation(
-                            el,
-                            false,
-                            false,
-                            false,
-                            false,
-                            ActivationSource::NotFromClick,
-                        )
+                        synthetic_click_activation(el, false, false, false, false, true)
                     }
                 }
                 Key::Enter if keyboard_event.state == KeyState::Up => {

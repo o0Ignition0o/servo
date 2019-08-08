@@ -18,6 +18,7 @@ use crate::dom::bindings::str::DOMString;
 use crate::dom::document::Document;
 use crate::dom::eventtarget::{CompiledEventListener, EventTarget, ListenerPhase};
 use crate::dom::globalscope::GlobalScope;
+use crate::dom::mouseevent::MouseEvent;
 use crate::dom::node::Node;
 use crate::dom::virtualmethods::vtable_for;
 use crate::dom::window::Window;
@@ -34,6 +35,7 @@ pub struct Event {
     reflector_: Reflector,
     current_target: MutNullableDom<EventTarget>,
     target: MutNullableDom<EventTarget>,
+    related_target: MutNullableDom<EventTarget>,
     type_: DomRefCell<Atom>,
     phase: Cell<EventPhase>,
     canceled: Cell<EventDefault>,
@@ -42,6 +44,7 @@ pub struct Event {
     cancelable: Cell<bool>,
     bubbles: Cell<bool>,
     trusted: Cell<bool>,
+    composed: Cell<bool>,
     dispatching: Cell<bool>,
     initialized: Cell<bool>,
     precise_time_ns: u64,
@@ -53,6 +56,7 @@ impl Event {
             reflector_: Reflector::new(),
             current_target: Default::default(),
             target: Default::default(),
+            related_target: Default::default(),
             type_: DomRefCell::new(atom!("")),
             phase: Cell::new(EventPhase::None),
             canceled: Cell::new(EventDefault::Allowed),
@@ -61,6 +65,7 @@ impl Event {
             cancelable: Cell::new(false),
             bubbles: Cell::new(false),
             trusted: Cell::new(false),
+            composed: Cell::new(false),
             dispatching: Cell::new(false),
             initialized: Cell::new(false),
             precise_time_ns: time::precise_time_ns(),
@@ -157,32 +162,53 @@ impl Event {
         self.dispatching.set(true);
 
         // Step 2.
-        self.target.set(Some(target_override.unwrap_or(target)));
+        let target_override = target_override.unwrap_or(target);
 
-        if self.stop_propagation.get() {
-            // If the event's stop propagation flag is set, we can skip everything because
-            // it prevents the calls of the invoke algorithm in the spec.
+        // Step 3.
+        let activation_target: Option<&EventTarget> = None;
 
-            // Step 10-12.
-            self.clear_dispatching_flags();
+        // Step 4.
+        // TODO: COME ON DO SOMETHING ABOUT THESE UNWRAPS XD 
+        let target_as_node = target.downcast::<Node>().unwrap();
+        let foo = self.related_target.get().unwrap();
+        let related_target_as_node = foo.downcast::<Node>().unwrap();
+        let bar = related_target_as_node.retarget(target_as_node);
+        let retargeted_related_target_as_node = bar.downcast::<Node>().unwrap();
 
-            // Step 14.
-            return self.status();
-        }
+        // Step 5.
+        if target_as_node != retargeted_related_target_as_node  || target_as_node == related_target_as_node {
+            // TODO: Steps 5.1 and 5.2: Handle touchTargets and append them to the event_path
 
-        // Step 3-4.
-        let path = self.construct_event_path(&target);
-        rooted_vec!(let event_path <- path.into_iter());
-        // Steps 5-9. In a separate function to short-circuit various things easily.
-        dispatch_to_listeners(self, target, event_path.r());
+            // Step 5.3
+            let path = self.construct_event_path(&target);
+            rooted_vec!(let event_path <- path.into_iter());
 
-        // Default action.
-        if let Some(target) = self.GetTarget() {
-            if let Some(node) = target.downcast::<Node>() {
-                let vtable = vtable_for(&node);
-                vtable.handle_event(self);
+            // Step 5.4
+            let is_activation_event =
+                self.Type() == "click" && self.downcast::<MouseEvent>().is_some();
+            // Steps 5. In a separate function to short-circuit various things easily.
+            dispatch_to_listeners(self, target, event_path.r());
+
+            // Default action.
+            if let Some(target) = self.GetTarget() {
+                if let Some(node) = target.downcast::<Node>() {
+                    let vtable = vtable_for(&node);
+                    vtable.handle_event(self);
+                }
             }
         }
+        /*
+                if self.stop_propagation.get() {
+                    // If the event's stop propagation flag is set, we can skip everything because
+                    // it prevents the calls of the invoke algorithm in the spec.
+
+                    // Step 10-12.
+                    self.clear_dispatching_flags();
+
+                    // Step 14.
+                    return self.status();
+                }
+        */
 
         // Step 10-12.
         self.clear_dispatching_flags();
@@ -238,6 +264,10 @@ impl Event {
 
     pub fn set_trusted(&self, trusted: bool) {
         self.trusted.set(trusted);
+    }
+
+    pub fn set_composed(&self, composed: bool) {
+        self.composed.set(composed);
     }
 
     // https://html.spec.whatwg.org/multipage/#fire-a-simple-event
@@ -479,10 +509,9 @@ fn dispatch_to_listeners(event: &Event, target: &EventTarget, event_path: &[&Eve
         _ => None,
     };
 
-    // Step 5.
+    // Step 5.13
     event.phase.set(EventPhase::Capturing);
 
-    // Step 6.
     for object in event_path.iter().rev() {
         invoke(
             window.as_deref(),
@@ -497,10 +526,8 @@ fn dispatch_to_listeners(event: &Event, target: &EventTarget, event_path: &[&Eve
     assert!(!event.stop_propagation.get());
     assert!(!event.stop_immediate.get());
 
-    // Step 7.
     event.phase.set(EventPhase::AtTarget);
 
-    // Step 8.
     invoke(window.as_deref(), target, event, None);
     if event.stop_propagation.get() {
         return;
@@ -508,14 +535,13 @@ fn dispatch_to_listeners(event: &Event, target: &EventTarget, event_path: &[&Eve
     assert!(!event.stop_propagation.get());
     assert!(!event.stop_immediate.get());
 
+    // Step 5.14
     if !event.bubbles.get() {
         return;
     }
 
-    // Step 9.1.
     event.phase.set(EventPhase::Bubbling);
 
-    // Step 9.2.
     for object in event_path {
         invoke(
             window.as_deref(),
